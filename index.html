@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>1日の予定プランナー</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E⏲%3C/text%3E%3C/svg%3E" type="image/svg+xml">
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -58,117 +60,164 @@
             padding: 8px;
             border: none;
             border-radius: 4px;
-            resize: unset;;
+            resize: unset;
         }
-        #downloadButton {
+        #downloadButton, #copyButton {
             position: fixed;
-            bottom: 20px;
-            right: 20px;
-            padding: 10px 15px;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
             background-color: #f0f0f0;
             border: none;
-            border-radius: 4px;
             cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
         }
-        #downloadButton:hover {
+        #downloadButton {
+            bottom: 20px;
+            right: 80px;
+        }
+        #copyButton {
+            bottom: 20px;
+            right: 20px;
+        }
+        #downloadButton:hover, #copyButton:hover {
             background-color: #e0e0e0;
+        }
+        .toast {
+            visibility: hidden;
+            min-width: 200px;
+            background-color: #333;
+            color: #fff;
+            text-align: center;
+            border-radius: 4px;
+            padding: 10px;
+            position: fixed;
+            z-index: 1;
+            right: 30px;
+            bottom: 80px;
+            font-size: 14px;
+        }
+        .toast.show {
+            visibility: visible;
+            animation: fadein 0.5s, fadeout 0.5s 2.5s;
+        }
+        @keyframes fadein {
+            from {bottom: 0; opacity: 0;}
+            to {bottom: 80px; opacity: 1;}
+        }
+        @keyframes fadeout {
+            from {bottom: 80px; opacity: 1;}
+            to {bottom: 0; opacity: 0;}
         }
     </style>
 </head>
 <body>
-    <h1>1日の予定プランナー</h1>
+    <div id="toast" class="toast"></div>
     <div class="container" id="categories"></div>
-    <button id="downloadButton">Markdownでダウンロード</button>
-
+    <button id="downloadButton" title="Markdownでダウンロード"><i class="fas fa-file-download"></i></button>
+    <button id="copyButton" title="Markdownとしてクリップボードにコピー"><i class="fas fa-copy"></i></button>
     <script>
         // 初期カテゴリ
         const initialCategories = ["買い物", "運動", "計画", "検討", "読書", "映画", "音楽", "学び", "家事", "家族会話"];
-
+        // 削除履歴スタック
+        const deleteHistory = [];
         // LocalStorageからデータを読み込む
         function loadData() {
             const data = localStorage.getItem('dailyPlannerData');
             return data ? JSON.parse(data) : {};
         }
-
         // LocalStorageにデータを保存する
         function saveData(data) {
             localStorage.setItem('dailyPlannerData', JSON.stringify(data));
         }
-
         // カテゴリを追加する関数
         function addCategory(name = "") {
             const container = document.getElementById('categories');
             const tile = document.createElement('div');
             tile.className = 'category-tile';
-
             const categoryTitle = document.createElement('div');
             categoryTitle.className = 'category-title';
             categoryTitle.contentEditable = true;
             categoryTitle.textContent = name;
             categoryTitle.onblur = () => {
                 updateData();
+                // カテゴリ名が入力されたら新しい空のカテゴリを追加
                 if (categoryTitle.textContent.trim() !== "" && container.lastChild === tile) {
                     addCategory("");
                 }
             };
             categoryTitle.oncontextmenu = (e) => {
                 e.preventDefault();
-                if (confirm("このカテゴリを削除しますか？")) {
-                    tile.remove();
-                    updateData();
-                }
+                deleteCategory(tile);
             };
-
             const taskList = document.createElement('div');
             taskList.className = 'task-list';
-
             const notesArea = document.createElement('textarea');
             notesArea.className = 'notes-area';
             notesArea.onblur = updateData;
-
             tile.appendChild(categoryTitle);
             tile.appendChild(taskList);
             tile.appendChild(notesArea);
             container.appendChild(tile);
-
-            // 初期タスクを1つ追加
+            // 空のタスクを1つ追加
             addTask(taskList);
+            return tile;
         }
-
         // タスクを追加する関数
         function addTask(taskList, checked = false, text = "") {
             const taskItem = document.createElement('div');
             taskItem.className = 'task-item';
-
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.checked = checked;
             checkbox.onchange = updateData;
-
             const taskInput = document.createElement('input');
             taskInput.type = 'text';
             taskInput.placeholder = 'タスクを入力...';
             taskInput.value = text;
-            taskInput.onblur = () => {
-                updateData();
-                const lastTaskItem = taskList.lastChild;
-                if (taskInput.value.trim() !== "" && lastTaskItem === taskItem) {
-                    addTask(taskList);
-                }
-            };
+            taskInput.onblur = updateData;
             taskInput.oncontextmenu = (e) => {
                 e.preventDefault();
-                if (confirm("このタスクを削除しますか？")) {
-                    taskItem.remove();
-                    updateData();
-                }
+                deleteTask(taskItem, taskList);
             };
-
             taskItem.appendChild(checkbox);
             taskItem.appendChild(taskInput);
             taskList.appendChild(taskItem);
+            return taskItem;
         }
-
+        // カテゴリを削除する関数
+        function deleteCategory(tile) {
+            const container = document.getElementById('categories');
+            const index = Array.from(container.children).indexOf(tile);
+            deleteHistory.push({
+                type: 'category',
+                index: index,
+                tile: tile.cloneNode(true)
+            });
+            tile.remove();
+            updateData();
+            showToast("削除しました（Ctrl+Zで戻す）");
+        }
+        // タスクを削除する関数
+        function deleteTask(taskItem, taskList) {
+            const index = Array.from(taskList.children).indexOf(taskItem);
+            deleteHistory.push({
+                type: 'task',
+                taskList: taskList,
+                index: index,
+                taskItem: taskItem.cloneNode(true)
+            });
+            taskItem.remove();
+            // タスクが0件なら空のタスク行を1つ追加
+            if (taskList.querySelectorAll('.task-item').length === 0) {
+                addTask(taskList);
+            }
+            updateData();
+            showToast("削除しました（Ctrl+Zで戻す）");
+        }
         // データを更新する関数
         function updateData() {
             const data = {};
@@ -191,7 +240,27 @@
             });
             saveData(data);
         }
-
+        // トーストを表示する関数
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = 'toast show';
+            setTimeout(() => {
+                toast.className = toast.className.replace('show', '');
+            }, 3000);
+        }
+        // 元に戻す関数
+        function undoDelete() {
+            if (deleteHistory.length === 0) return;
+            const lastDelete = deleteHistory.pop();
+            if (lastDelete.type === 'category') {
+                const container = document.getElementById('categories');
+                container.insertBefore(lastDelete.tile, container.children[lastDelete.index]);
+            } else if (lastDelete.type === 'task') {
+                lastDelete.taskList.insertBefore(lastDelete.taskItem, lastDelete.taskList.children[lastDelete.index]);
+            }
+            updateData();
+        }
         // Markdown形式でデータをダウンロードする関数
         function downloadMarkdown() {
             const data = loadData();
@@ -206,10 +275,8 @@
                 }
                 markdown += '\n';
             }
-
             const now = new Date();
             const filename = `alltasks-${now.getFullYear()%100}${String(now.getMonth()+1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}.md`;
-
             const blob = new Blob([markdown], { type: 'text/markdown' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -218,20 +285,42 @@
             a.click();
             URL.revokeObjectURL(url);
         }
-
+        // Markdown形式でクリップボードにコピーする関数
+        async function copyMarkdown() {
+            const data = loadData();
+            let markdown = "";
+            for (const [category, content] of Object.entries(data)) {
+                markdown += `# ${category}\n`;
+                content.tasks.forEach(task => {
+                    markdown += `- [${task.checked ? 'x' : ' '}] ${task.text}\n`;
+                });
+                if (content.notes) {
+                    markdown += `## メモ\n${content.notes}\n\n`;
+                }
+                markdown += '\n';
+            }
+            try {
+                await navigator.clipboard.writeText(markdown);
+                showToast("Markdown形式でクリップボードにコピーしました！");
+            } catch (err) {
+                showToast("クリップボードへのコピーに失敗しました");
+            }
+        }
         // 初期化
         document.addEventListener('DOMContentLoaded', () => {
             const data = loadData();
             if (Object.keys(data).length > 0) {
                 for (const [category, content] of Object.entries(data)) {
-                    addCategory(category);
-                    const tiles = document.querySelectorAll('.category-tile');
-                    const tile = tiles[tiles.length - 1];
+                    const tile = addCategory(category);
                     const taskList = tile.querySelector('.task-list');
                     taskList.innerHTML = '';
                     content.tasks.forEach(task => {
-                        addTask(taskList, task.checked, task.text);
+                        if (task.text.trim() !== "" || task.checked) {
+                            addTask(taskList, task.checked, task.text);
+                        }
                     });
+                    // 空のタスク行を1つ追加
+                    addTask(taskList);
                     tile.querySelector('.notes-area').value = content.notes;
                 }
             } else {
@@ -239,11 +328,16 @@
                     addCategory(category);
                 });
             }
-
             // 空のカテゴリを1つ追加
             addCategory("");
-
             document.getElementById('downloadButton').onclick = downloadMarkdown;
+            document.getElementById('copyButton').onclick = copyMarkdown;
+            // Ctrl+Zで元に戻す
+            document.addEventListener('keydown', (e) => {
+                if (e.ctrlKey && e.key === 'z') {
+                    undoDelete();
+                }
+            });
         });
     </script>
 </body>
