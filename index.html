@@ -40,27 +40,45 @@
             padding-bottom: 6px;
             display: block;
             outline: none;
+            min-height: 24px;
         }
 
-        .category-title:empty::before {
-            content: "新しいカテゴリ";
+        .category-title:empty {
             color: #adb5bd;
             font-style: italic;
         }
 
         .task-list {
             margin-bottom: 12px;
+            min-height: 20px;
         }
 
         .task-item {
             display: flex;
             align-items: center;
             margin-bottom: 6px;
+            padding: 6px 8px;
+            border-radius: 6px;
+            cursor: grab;
+            transition: background-color 0.2s;
+        }
+
+        .task-item:hover {
+            background-color: rgba(143, 163, 184, 0.08);
+        }
+
+        .task-item.dragging {
+            opacity: 0.5;
         }
 
         .task-item input[type="checkbox"] {
-            margin-right: 10px;
+            margin-right: 12px;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
             accent-color: #8fa3b8;
+            cursor: pointer;
+            pointer-events: none;
         }
 
         .task-item input[type="text"] {
@@ -71,7 +89,6 @@
             background-color: rgba(255, 255, 255, 0.3);
             color: #495057;
             transition: border-color 0.2s, background-color 0.2s;
-            width: calc(100% - 30px);
             box-sizing: border-box;
         }
 
@@ -84,17 +101,18 @@
 
         .notes-area {
             width: 100%;
-            min-height: 70px;
+            min-height: 40px;
             margin-top: 10px;
             padding: 10px 12px;
             border: 1px solid #e9ecef;
             border-radius: 6px;
             background-color: rgba(255, 255, 255, 0.3);
             color: #495057;
-            resize: vertical;
             box-sizing: border-box;
             font-family: inherit;
             transition: border-color 0.2s, background-color 0.2s;
+            resize: none;
+            overflow: hidden;
         }
 
         .notes-area:focus {
@@ -186,15 +204,14 @@
 </head>
 
 <body>
-    <!-- スクリプト部分は前回と同じのため省略 -->
     <div id="toast" class="toast"></div>
     <div class="container" id="categories"></div>
     <button id="downloadButton" title="Markdownでダウンロード"><i class="fas fa-file-download"></i></button>
     <button id="copyButton" title="Markdownとしてクリップボードにコピー"><i class="fas fa-copy"></i></button>
     <script>
-        // 前回と同じスクリプトを使用
         const initialCategories = ["買い物", "運動", "計画", "検討", "読書", "映画", "音楽", "学び", "家事", "家族会議"];
         const deleteHistory = [];
+        let draggedTaskItem = null;
 
         function getSoftPastelColor() {
             const hues = [30, 120, 210, 270, 330];
@@ -211,7 +228,7 @@
             const data = {};
             document.querySelectorAll('.category-tile').forEach(tile => {
                 const categoryTitle = tile.querySelector('.category-title');
-                const category = categoryTitle.textContent.trim() || "新しいカテゴリ";
+                const category = categoryTitle.textContent.trim() || "";
                 const tasks = [];
                 tile.querySelectorAll('.task-item').forEach(item => {
                     const checkbox = item.querySelector('input[type="checkbox"]');
@@ -248,11 +265,14 @@
 
             const taskList = document.createElement('div');
             taskList.className = 'task-list';
+            taskList.addEventListener('mouseenter', () => showTempTask(taskList));
+            taskList.addEventListener('dragover', handleTaskDragOver);
+            taskList.addEventListener('drop', handleTaskDrop);
 
             const notesArea = document.createElement('textarea');
             notesArea.className = 'notes-area';
-            notesArea.placeholder = "メモを入力...";
             notesArea.onblur = saveData;
+            notesArea.oninput = autoResizeTextarea;
 
             tile.appendChild(categoryTitle);
             tile.appendChild(taskList);
@@ -266,6 +286,7 @@
         function addTask(taskList, checked = false, text = "") {
             const taskItem = document.createElement('div');
             taskItem.className = 'task-item';
+            taskItem.draggable = true;
 
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
@@ -275,18 +296,8 @@
             const taskInput = document.createElement('input');
             taskInput.type = 'text';
             taskInput.className = 'task-input';
-            taskInput.placeholder = 'タスクを入力...';
             taskInput.value = text;
-
-            taskInput.oninput = function (e) {
-                const inputs = taskList.querySelectorAll('.task-input');
-                const currentIndex = Array.from(inputs).indexOf(e.target);
-                if (currentIndex === inputs.length - 2 && e.target.value.length > 0) {
-                    addTask(taskList);
-                }
-                saveData();
-            };
-
+            taskInput.oninput = saveData;
             taskInput.oncontextmenu = (e) => {
                 e.preventDefault();
                 deleteTask(taskItem, taskList);
@@ -295,7 +306,28 @@
             taskItem.appendChild(checkbox);
             taskItem.appendChild(taskInput);
             taskList.appendChild(taskItem);
+
+            taskItem.addEventListener('dragstart', (e) => {
+                draggedTaskItem = taskItem;
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/html', taskItem.innerHTML);
+                setTimeout(() => {
+                    taskItem.classList.add('dragging');
+                }, 0);
+            });
+
             return taskItem;
+        }
+
+        function showTempTask(taskList) {
+            const emptyTasks = Array.from(taskList.querySelectorAll('.task-item')).filter(item => {
+                return item.querySelector('input[type="text"]').value.trim() === "";
+            });
+
+            if (emptyTasks.length === 0) {
+                const taskItem = addTask(taskList);
+                taskItem.querySelector('input[type="text"]').focus();
+            }
         }
 
         function deleteCategory(tile) {
@@ -353,14 +385,16 @@
             const data = loadData();
             let markdown = "";
             for (const [category, content] of Object.entries(data)) {
-                markdown += `# ${category}\n`;
-                content.tasks.forEach(task => {
-                    markdown += `- [${task.checked ? 'x' : ' '}] ${task.text}\n`;
-                });
-                if (content.notes) {
-                    markdown += `## メモ\n${content.notes}\n\n`;
+                if (category) {
+                    markdown += `# ${category}\n`;
+                    content.tasks.forEach(task => {
+                        markdown += `- [${task.checked ? 'x' : ' '}] ${task.text}\n`;
+                    });
+                    if (content.notes) {
+                        markdown += `## メモ\n${content.notes}\n\n`;
+                    }
+                    markdown += '\n';
                 }
-                markdown += '\n';
             }
             const now = new Date();
             const filename = `alltasks-${now.getFullYear() % 100}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}.md`;
@@ -377,14 +411,16 @@
             const data = loadData();
             let markdown = "";
             for (const [category, content] of Object.entries(data)) {
-                markdown += `# ${category}\n`;
-                content.tasks.forEach(task => {
-                    markdown += `- [${task.checked ? 'x' : ' '}] ${task.text}\n`;
-                });
-                if (content.notes) {
-                    markdown += `## メモ\n${content.notes}\n\n`;
+                if (category) {
+                    markdown += `# ${category}\n`;
+                    content.tasks.forEach(task => {
+                        markdown += `- [${task.checked ? 'x' : ' '}] ${task.text}\n`;
+                    });
+                    if (content.notes) {
+                        markdown += `## メモ\n${content.notes}\n\n`;
+                    }
+                    markdown += '\n';
                 }
-                markdown += '\n';
             }
             try {
                 await navigator.clipboard.writeText(markdown);
@@ -394,13 +430,49 @@
             }
         }
 
+        function autoResizeTextarea(e) {
+            e.target.style.height = 'auto';
+            e.target.style.height = (e.target.scrollHeight) + 'px';
+            saveData();
+        }
+
+        function handleTaskDragOver(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            const taskList = e.currentTarget;
+            const afterElement = getDragAfterElement(taskList, e.clientY);
+            if (afterElement) {
+                taskList.insertBefore(draggedTaskItem, afterElement);
+            } else {
+                taskList.appendChild(draggedTaskItem);
+            }
+        }
+
+        function handleTaskDrop(e) {
+            e.preventDefault();
+            saveData();
+        }
+
+        function getDragAfterElement(container, y) {
+            const draggableElements = [...container.querySelectorAll('.task-item:not(.dragging)')];
+            return draggableElements.reduce((closest, child) => {
+                const box = child.getBoundingClientRect();
+                const offset = y - box.top - box.height / 2;
+                if (offset < 0 && offset > closest.offset) {
+                    return { offset: offset, element: child };
+                } else {
+                    return closest;
+                }
+            }, { offset: Number.NEGATIVE_INFINITY }).element;
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             const container = document.getElementById('categories');
-            let draggedItem = null;
+            let draggedCategoryItem = null;
 
             container.addEventListener('dragstart', (e) => {
                 if (e.target.classList.contains('category-tile')) {
-                    draggedItem = e.target;
+                    draggedCategoryItem = e.target;
                     e.target.classList.add('dragging');
                     e.dataTransfer.effectAllowed = 'move';
                     e.dataTransfer.setData('text/html', e.target.innerHTML);
@@ -410,8 +482,8 @@
             container.addEventListener('dragover', (e) => {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'move';
-                const afterElement = getDragAfterElement(container, e.clientY);
-                const draggable = document.querySelector('.dragging');
+                const afterElement = getCategoryDragAfterElement(container, e.clientY);
+                const draggable = document.querySelector('.category-tile.dragging');
                 if (afterElement == null) {
                     container.appendChild(draggable);
                 } else {
@@ -424,9 +496,12 @@
                     e.target.classList.remove('dragging');
                     saveData();
                 }
+                if (e.target.classList.contains('task-item')) {
+                    e.target.classList.remove('dragging');
+                }
             });
 
-            function getDragAfterElement(container, y) {
+            function getCategoryDragAfterElement(container, y) {
                 const draggableElements = [...container.querySelectorAll('.category-tile:not(.dragging)')];
                 return draggableElements.reduce((closest, child) => {
                     const box = child.getBoundingClientRect();
@@ -447,12 +522,14 @@
                     const taskList = tile.querySelector('.task-list');
                     taskList.innerHTML = '';
                     content.tasks.forEach(task => {
-                        if (task.text.trim() !== "" || task.checked) {
-                            addTask(taskList, task.checked, task.text);
-                        }
+                        addTask(taskList, task.checked, task.text);
                     });
-                    addTask(taskList);
-                    tile.querySelector('.notes-area').value = content.notes;
+                    if (taskList.querySelectorAll('.task-item').length === 0) {
+                        addTask(taskList);
+                    }
+                    const notesArea = tile.querySelector('.notes-area');
+                    notesArea.value = content.notes;
+                    autoResizeTextarea({ target: notesArea });
                 }
             } else {
                 initialCategories.forEach(category => {
